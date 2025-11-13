@@ -117,11 +117,19 @@ class RAGService:
     def _settings_context(self) -> Generator[None, None, None]:
         llm = self._ensure_llm()
         embed_model = self._ensure_embedding_model()
-        cm_kwargs = {}
+        previous_llm = Settings.llm
+        previous_embed = Settings.embed_model
+        previous_callback = Settings.callback_manager
+        Settings.llm = llm
+        Settings.embed_model = embed_model
         if self._callback_manager is not None:
-            cm_kwargs["callback_manager"] = self._callback_manager
-        with Settings.context(llm=llm, embed_model=embed_model, **cm_kwargs):
+            Settings.callback_manager = self._callback_manager
+        try:
             yield
+        finally:
+            Settings.llm = previous_llm
+            Settings.embed_model = previous_embed
+            Settings.callback_manager = previous_callback
 
     def _ensure_llm(self) -> HuggingFaceLLM:
         if self._llm is None:
