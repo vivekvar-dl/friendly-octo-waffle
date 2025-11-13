@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import logging
 from threading import Lock
-from typing import Dict, List, Optional
+from contextlib import contextmanager
+from typing import Dict, Generator, List, Optional
 
 import torch
 from llama_index.core import (
-    ServiceContext,
+    Settings,
     StorageContext,
     VectorStoreIndex,
     load_index_from_storage,
@@ -33,7 +34,8 @@ class RAGService:
     ) -> None:
         self.settings = settings or get_settings()
         self._callback_manager = callback_manager
-        self._service_context: Optional[ServiceContext] = None
+        self._llm = None
+        self._embed_model = None
         self._index: Optional[VectorStoreIndex] = None
         self._lock = Lock()
 
@@ -53,14 +55,12 @@ class RAGService:
                 logger.warning(msg)
                 raise FileNotFoundError(msg)
 
-            service_context = self._ensure_service_context()
-
-            index = VectorStoreIndex.from_documents(
-                documents,
-                service_context=service_context,
-                show_progress=True,
-            )
-            index.storage_context.persist(persist_dir=str(self.settings.resolved_persist_dir))
+            with self._settings_context():
+                index = VectorStoreIndex.from_documents(
+                    documents,
+                    show_progress=True,
+                )
+                index.storage_context.persist(persist_dir=str(self.settings.resolved_persist_dir))
 
             self._index = index
             logger.info("Persisted vector index with %s documents", len(documents))
@@ -71,9 +71,10 @@ class RAGService:
         if not question.strip():
             raise ValueError("Question must be a non-empty string.")
 
-        index = self._ensure_index_loaded()
-        query_engine = index.as_query_engine(similarity_top_k=similarity_top_k)
-        response = query_engine.query(question)
+        with self._settings_context():
+            index = self._ensure_index_loaded()
+            query_engine = index.as_query_engine(similarity_top_k=similarity_top_k)
+            response = query_engine.query(question)
 
         sources: List[Dict[str, str]] = []
         for node in response.source_nodes:
@@ -105,26 +106,32 @@ class RAGService:
                 return self._index  # type: ignore[return-value]
 
             storage_context = StorageContext.from_defaults(persist_dir=str(persist_dir))
-            service_context = self._ensure_service_context()
-            self._index = load_index_from_storage(
-                storage_context=storage_context,
-                service_context=service_context,
-            )
+            with self._settings_context():
+                self._index = load_index_from_storage(
+                    storage_context=storage_context,
+                )
             logger.info("Loaded persisted index from %s", persist_dir)
             return self._index
 
-    def _ensure_service_context(self) -> ServiceContext:
-        if self._service_context is not None:
-            return self._service_context
+    @contextmanager
+    def _settings_context(self) -> Generator[None, None, None]:
+        llm = self._ensure_llm()
+        embed_model = self._ensure_embedding_model()
+        cm_kwargs = {}
+        if self._callback_manager is not None:
+            cm_kwargs["callback_manager"] = self._callback_manager
+        with Settings.context(llm=llm, embed_model=embed_model, **cm_kwargs):
+            yield
 
-        llm = self._create_llm()
-        embed_model = self._create_embedding_model()
-        self._service_context = ServiceContext.from_defaults(
-            llm=llm,
-            embed_model=embed_model,
-            callback_manager=self._callback_manager,
-        )
-        return self._service_context
+    def _ensure_llm(self) -> HuggingFaceLLM:
+        if self._llm is None:
+            self._llm = self._create_llm()
+        return self._llm
+
+    def _ensure_embedding_model(self) -> HuggingFaceEmbedding:
+        if self._embed_model is None:
+            self._embed_model = self._create_embedding_model()
+        return self._embed_model
 
     def _create_llm(self) -> HuggingFaceLLM:
         model_kwargs: Dict[str, object] = {"trust_remote_code": True}
