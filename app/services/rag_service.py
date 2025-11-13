@@ -166,8 +166,8 @@ class RAGService:
             tokenizer_name=self.settings.model_name,
             generate_kwargs={
                 "temperature": self.settings.temperature,
-                "max_new_tokens": self.settings.max_new_tokens,
             },
+            max_new_tokens=self.settings.max_new_tokens,
             model_kwargs=model_kwargs,
             tokenizer_kwargs={"padding_side": "left", "truncation_side": "left"},
             system_prompt=system_prompt,
