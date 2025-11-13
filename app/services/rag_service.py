@@ -117,9 +117,12 @@ class RAGService:
     def _settings_context(self) -> Generator[None, None, None]:
         llm = self._ensure_llm()
         embed_model = self._ensure_embedding_model()
-        previous_llm = Settings.llm
-        previous_embed = Settings.embed_model
-        previous_callback = Settings.callback_manager
+        had_llm = hasattr(Settings, "_llm")
+        had_embed = hasattr(Settings, "_embed_model")
+        had_callback = hasattr(Settings, "_callback_manager")
+        previous_llm = getattr(Settings, "_llm", None)
+        previous_embed = getattr(Settings, "_embed_model", None)
+        previous_callback = getattr(Settings, "_callback_manager", None)
         Settings.llm = llm
         Settings.embed_model = embed_model
         if self._callback_manager is not None:
@@ -127,9 +130,21 @@ class RAGService:
         try:
             yield
         finally:
-            Settings.llm = previous_llm
-            Settings.embed_model = previous_embed
-            Settings.callback_manager = previous_callback
+            if had_llm:
+                Settings.llm = previous_llm
+            else:
+                if hasattr(Settings, "_llm"):
+                    delattr(Settings, "_llm")
+            if had_embed:
+                Settings.embed_model = previous_embed
+            else:
+                if hasattr(Settings, "_embed_model"):
+                    delattr(Settings, "_embed_model")
+            if self._callback_manager is not None:
+                if had_callback:
+                    Settings.callback_manager = previous_callback
+                elif hasattr(Settings, "_callback_manager"):
+                    delattr(Settings, "_callback_manager")
 
     def _ensure_llm(self) -> HuggingFaceLLM:
         if self._llm is None:
