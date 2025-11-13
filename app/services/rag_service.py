@@ -68,7 +68,10 @@ class RAGService:
             raise ValueError("Question must be a non-empty string.")
 
         index = self._ensure_index_loaded()
-        query_engine = index.as_query_engine(similarity_top_k=similarity_top_k)
+        query_engine = index.as_query_engine(
+            similarity_top_k=similarity_top_k,
+            llm=self._ensure_llm(),
+        )
         response = query_engine.query(question)
 
         sources: List[Dict[str, str]] = []
