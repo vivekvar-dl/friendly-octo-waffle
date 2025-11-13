@@ -2,16 +2,10 @@ from __future__ import annotations
 
 import logging
 from threading import Lock
-from contextlib import contextmanager
-from typing import Dict, Generator, List, Optional
+from typing import Dict, List, Optional
 
 import torch
-from llama_index.core import (
-    Settings,
-    StorageContext,
-    VectorStoreIndex,
-    load_index_from_storage,
-)
+from llama_index.core import StorageContext, VectorStoreIndex, load_index_from_storage
 from llama_index.core.callbacks.base import CallbackManager
 from llama_index.core.llms import ChatMessage, MessageRole
 from llama_index.core.readers import SimpleDirectoryReader
@@ -55,12 +49,14 @@ class RAGService:
                 logger.warning(msg)
                 raise FileNotFoundError(msg)
 
-            with self._settings_context():
-                index = VectorStoreIndex.from_documents(
-                    documents,
-                    show_progress=True,
-                )
-                index.storage_context.persist(persist_dir=str(self.settings.resolved_persist_dir))
+            index = VectorStoreIndex.from_documents(
+                documents,
+                llm=self._ensure_llm(),
+                embed_model=self._ensure_embedding_model(),
+                callback_manager=self._callback_manager,
+                show_progress=True,
+            )
+            index.storage_context.persist(persist_dir=str(self.settings.resolved_persist_dir))
 
             self._index = index
             logger.info("Persisted vector index with %s documents", len(documents))
@@ -71,10 +67,9 @@ class RAGService:
         if not question.strip():
             raise ValueError("Question must be a non-empty string.")
 
-        with self._settings_context():
-            index = self._ensure_index_loaded()
-            query_engine = index.as_query_engine(similarity_top_k=similarity_top_k)
-            response = query_engine.query(question)
+        index = self._ensure_index_loaded()
+        query_engine = index.as_query_engine(similarity_top_k=similarity_top_k)
+        response = query_engine.query(question)
 
         sources: List[Dict[str, str]] = []
         for node in response.source_nodes:
@@ -106,45 +101,14 @@ class RAGService:
                 return self._index  # type: ignore[return-value]
 
             storage_context = StorageContext.from_defaults(persist_dir=str(persist_dir))
-            with self._settings_context():
-                self._index = load_index_from_storage(
-                    storage_context=storage_context,
-                )
+            self._index = load_index_from_storage(
+                storage_context=storage_context,
+                llm=self._ensure_llm(),
+                embed_model=self._ensure_embedding_model(),
+                callback_manager=self._callback_manager,
+            )
             logger.info("Loaded persisted index from %s", persist_dir)
             return self._index
-
-    @contextmanager
-    def _settings_context(self) -> Generator[None, None, None]:
-        llm = self._ensure_llm()
-        embed_model = self._ensure_embedding_model()
-        had_llm = hasattr(Settings, "_llm")
-        had_embed = hasattr(Settings, "_embed_model")
-        had_callback = hasattr(Settings, "_callback_manager")
-        previous_llm = getattr(Settings, "_llm", None)
-        previous_embed = getattr(Settings, "_embed_model", None)
-        previous_callback = getattr(Settings, "_callback_manager", None)
-        Settings.llm = llm
-        Settings.embed_model = embed_model
-        if self._callback_manager is not None:
-            Settings.callback_manager = self._callback_manager
-        try:
-            yield
-        finally:
-            if had_llm:
-                Settings.llm = previous_llm
-            else:
-                if hasattr(Settings, "_llm"):
-                    delattr(Settings, "_llm")
-            if had_embed:
-                Settings.embed_model = previous_embed
-            else:
-                if hasattr(Settings, "_embed_model"):
-                    delattr(Settings, "_embed_model")
-            if self._callback_manager is not None:
-                if had_callback:
-                    Settings.callback_manager = previous_callback
-                elif hasattr(Settings, "_callback_manager"):
-                    delattr(Settings, "_callback_manager")
 
     def _ensure_llm(self) -> HuggingFaceLLM:
         if self._llm is None:
